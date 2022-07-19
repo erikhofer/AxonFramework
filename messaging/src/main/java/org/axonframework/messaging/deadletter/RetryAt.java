@@ -19,7 +19,7 @@ public class RetryAt implements RetryDecision {
     }
 
     @Override
-    public Instant retryAt() {
+    public Instant releaseAt() {
         return at;
     }
 

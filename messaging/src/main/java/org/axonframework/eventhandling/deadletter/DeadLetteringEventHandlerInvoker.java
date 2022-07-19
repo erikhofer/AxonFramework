@@ -62,7 +62,7 @@ public class DeadLetteringEventHandlerInvoker extends SimpleEventHandlerInvoker 
 
     private static final Logger logger = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
-    private final DeadLetterQueue<EventMessage<?>> queue;
+    private final DeadLetterQueue<DeadLetter<?>> queue;
     private final String processingGroup;
     private final TransactionManager transactionManager;
     private final boolean allowReset;

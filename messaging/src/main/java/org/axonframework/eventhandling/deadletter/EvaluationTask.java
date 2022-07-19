@@ -105,6 +105,7 @@ class EvaluationTask implements Runnable {
 
     private void acknowledge(DeadLetter<EventMessage<?>> letter) {
         try {
+//            queue.remove()
             letter.acknowledge();
             logger.info(
                     "Dead-letter [{}] is acknowledged as it is successfully handled for queue identifier [{}].",
@@ -121,6 +122,7 @@ class EvaluationTask implements Runnable {
 
     private void requeue(DeadLetter<EventMessage<?>> letter, UnitOfWork<? extends EventMessage<?>> uow) {
         try {
+//            queue.enqueue()
             letter.requeue();
             logger.warn(
                     "Reentered dead-letter [{}] for queue identifier [{}] in the queue since evaluation failed.",

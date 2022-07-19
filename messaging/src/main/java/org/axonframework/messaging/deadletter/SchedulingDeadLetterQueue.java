@@ -53,14 +53,13 @@ import static org.axonframework.common.BuilderUtils.assertNonNull;
  * @author Steven van Beelen
  * @since 4.6.0
  */
-public class SchedulingRetryableDeadLetterQueue<M extends Message<?>>
-        implements RetryableDeadLetterQueue<RetryableDeadLetter<M>, M>, Lifecycle {
+public abstract class SchedulingDeadLetterQueue<D extends DeadLetter<?>>
+        implements DeadLetterQueue<D>, Lifecycle {
 
     private static final Logger logger = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
     protected final Map<String, Runnable> availabilityCallbacks = new ConcurrentSkipListMap<>();
 
-    private final DeadLetterQueue<RetryableDeadLetter<M>, M> delegate;
     private final RetryPolicy<M> retryPolicy;
     protected final ScheduledExecutorService scheduledExecutorService;
     private final boolean customExecutor;
@@ -68,10 +67,10 @@ public class SchedulingRetryableDeadLetterQueue<M extends Message<?>>
     /**
      * Instantiate a scheduling {@link DeadLetterQueue} implementation based on the given {@link Builder builder}.
      *
-     * @param builder The {@link Builder} used to instantiate a {@link SchedulingRetryableDeadLetterQueue}
+     * @param builder The {@link Builder} used to instantiate a {@link SchedulingDeadLetterQueue}
      *                implementation with.
      */
-    protected SchedulingRetryableDeadLetterQueue(Builder<M> builder) {
+    protected SchedulingDeadLetterQueue(Builder<M> builder) {
         builder.validate();
         this.delegate = builder.delegate;
         this.scheduledExecutorService = builder.scheduledExecutorService;
@@ -85,38 +84,38 @@ public class SchedulingRetryableDeadLetterQueue<M extends Message<?>>
     }
 
     @Override
-    public RetryableDeadLetter<M> enqueue(@Nonnull QueueIdentifier identifier,
+    public DeadLetter<M> enqueue(@Nonnull QueueIdentifier identifier,
                                           @Nonnull M deadLetter,
                                           Throwable cause) throws DeadLetterQueueOverflowException {
-        RetryableDeadLetter<M> letter = delegate.enqueue(identifier, deadLetter, cause);
+        DeadLetter<M> letter = delegate.enqueue(identifier, deadLetter, cause);
         RetryDecision decision = retryPolicy.decide(letter, cause);
-        GenericRetryableDeadLetter<M> retryableLetter =
-                new GenericRetryableDeadLetter<>(letter, decision.retryAt(), 0, this::acknowledge, this::requeue);
+        GenericDeadLetter<M> retryableLetter =
+                new GenericDeadLetter<>(letter, decision.retryAt(), 0, this::acknowledge, this::requeue);
         enqueue(retryableLetter);
         return letter;
     }
 
     @Override
-    public void enqueue(@Nonnull RetryableDeadLetter<M> letter) throws DeadLetterQueueOverflowException {
+    public void enqueue(@Nonnull DeadLetter<M> letter) throws DeadLetterQueueOverflowException {
         RetryDecision decision = retryPolicy.decide(letter, null);
         decision.retryAt();
         if (decision.shouldRetry()) {
-            delegate.enqueue(new GenericRetryableDeadLetter<>(letter, decision.retryAt(), this::acknowledge, this::requeue));
+            delegate.enqueue(new GenericDeadLetter<>(letter, decision.retryAt(), this::acknowledge, this::requeue));
             letter.release();
         } else {
             letter.evict();
         }
     }
 
-    private void acknowledge(RetryableDeadLetter<M> letter) {
+    private void acknowledge(DeadLetter<M> letter) {
         letter.evict();
     }
 
-    private void requeue(RetryableDeadLetter<M> letter, Throwable cause) {
+    private void requeue(DeadLetter<M> letter, Throwable cause) {
         RetryDecision decision = retryPolicy.decide(letter, cause);
         if (decision.shouldRetry()) {
             // TODO: 15-07-22 how do we ensure this enters the letter back in front of it's own queue?
-            delegate.enqueue(new GenericRetryableDeadLetter<>(letter, decision.retryAt(), this::acknowledge, this::requeue));
+            delegate.enqueue(new GenericDeadLetter<>(letter, decision.retryAt(), this::acknowledge, this::requeue));
             letter.release();
         } else {
             letter.evict();
@@ -131,10 +130,10 @@ public class SchedulingRetryableDeadLetterQueue<M extends Message<?>>
      * @param letter The {@link QueueIdentifier} to schedule registered
      *               {@link #onAvailable(String, Runnable) availability callbacks} for.
      */
-    protected void scheduleAvailabilityCallbacks(RetryableDeadLetter<M> letter) {
+    protected void scheduleAvailabilityCallbacks(DeadLetter<M> letter) {
         RetryDecision decision = retryPolicy.decide(letter, null);
         if (decision.shouldRetry()) {
-            long retryAt = decision.retryAt().toEpochMilli();
+            long retryAt = decision.releaseAt().toEpochMilli();
             long current = Instant.now().toEpochMilli();
             long retryIn = retryAt - current;
             availabilityCallbacks.entrySet()
@@ -154,7 +153,7 @@ public class SchedulingRetryableDeadLetterQueue<M extends Message<?>>
     }
 
     @Override
-    public Iterable<RetryableDeadLetter<M>> deadLetters(@Nonnull QueueIdentifier identifier) {
+    public Iterable<DeadLetter<M>> deadLetters(@Nonnull QueueIdentifier identifier) {
         return delegate.deadLetters(identifier);
     }
 
@@ -179,7 +178,7 @@ public class SchedulingRetryableDeadLetterQueue<M extends Message<?>>
     }
 
     @Override
-    public Optional<RetryableDeadLetter<M>> take(@Nonnull String group) {
+    public Optional<DeadLetter<M>> take(@Nonnull String group) {
         logger.trace("Attempting to take a dead letter from the queue for [{}].", group);
         if (deadLetters.isEmpty()) {
             return Optional.empty();
@@ -206,8 +205,8 @@ public class SchedulingRetryableDeadLetterQueue<M extends Message<?>>
         return Optional.of(letter);
     }
 
-    //    private RetryableDeadLetter<M> getEarliestLetter(List<QueueIdentifier> queueIds) {
-//        Set<Map.Entry<QueueIdentifier, Deque<RetryableDeadLetter<M>>>> availableSequences =
+    //    private DeadLetter<M> getEarliestLetter(List<QueueIdentifier> queueIds) {
+//        Set<Map.Entry<QueueIdentifier, Deque<DeadLetter<M>>>> availableSequences =
 //                deadLetters.entrySet()
 //                           .stream()
 //                           .filter(entry -> queueIds.contains(entry.getKey()))
@@ -215,9 +214,9 @@ public class SchedulingRetryableDeadLetterQueue<M extends Message<?>>
 //
 //        Instant current = clock.instant();
 //        long earliestExpiredSequence = Long.MAX_VALUE;
-//        RetryableDeadLetter<M> earliestExpiredLetter = null;
-//        for (Map.Entry<QueueIdentifier, Deque<RetryableDeadLetter<M>>> sequence : availableSequences) {
-//            RetryableDeadLetter<M> letter = sequence.getValue().peekFirst();
+//        DeadLetter<M> earliestExpiredLetter = null;
+//        for (Map.Entry<QueueIdentifier, Deque<DeadLetter<M>>> sequence : availableSequences) {
+//            DeadLetter<M> letter = sequence.getValue().peekFirst();
 //            if (letter != null
 //                    && letter.expiresAt().toEpochMilli() <= current.toEpochMilli()
 //                    && letter.expiresAt().toEpochMilli() < earliestExpiredSequence) {
@@ -244,7 +243,7 @@ public class SchedulingRetryableDeadLetterQueue<M extends Message<?>>
 //                   .stream()
 //                   .flatMap(Collection::stream)
 //                   .filter(letter -> queueFilter.test(letter.queueIdentifier()))
-//                   .map(letter -> (GenericRetryableDeadLetter<M>) letter)
+//                   .map(letter -> (GenericDeadLetter<M>) letter)
 //                   .forEach(letter -> {
 //                       letter.setExpiresAt(now);
 //                       releasedGroups.add(letter.queueIdentifier().group());
@@ -272,7 +271,7 @@ public class SchedulingRetryableDeadLetterQueue<M extends Message<?>>
     }
 
     /**
-     * Abstract builder class to instantiate a {@link SchedulingRetryableDeadLetterQueue} implementations.
+     * Abstract builder class to instantiate a {@link SchedulingDeadLetterQueue} implementations.
      * <p>
      * The expiry threshold defaults to a {@link Duration} of 5000 milliseconds, and the
      * {@link ScheduledExecutorService} defaults to a {@link Executors#newSingleThreadScheduledExecutor(ThreadFactory)},
@@ -281,10 +280,10 @@ public class SchedulingRetryableDeadLetterQueue<M extends Message<?>>
      * @param <M> The type of {@link Message} maintained in this {@link DeadLetterQueue}.
      */
     //@param <B> The type of builder implementing this abstract builder class.
-//    <D extends RetryableDeadLetter<M>, M extends Message<?>>
+//    <D extends DeadLetter<M>, M extends Message<?>>
     protected static class Builder<M extends Message<?>> {
 
-        private DeadLetterQueue<RetryableDeadLetter<M>, M> delegate;
+        private DeadLetterQueue<M, ? extends DeadLetter<M>> delegate;
         private RetryPolicy<M> retryPolicy = new IntervalRetryPolicy<>();
         protected ScheduledExecutorService scheduledExecutorService =
                 Executors.newSingleThreadScheduledExecutor(new AxonThreadFactory("AbstractDeadLetterQueue"));
@@ -294,7 +293,7 @@ public class SchedulingRetryableDeadLetterQueue<M extends Message<?>>
          * @param delegate
          * @return The current Builder, for fluent interfacing.
          */
-        public Builder<M> delegate(DeadLetterQueue<RetryableDeadLetter<M>, M> delegate) {
+        public Builder<M> delegate(DeadLetterQueue<M, ? extends DeadLetter<M>> delegate) {
             assertNonNull(delegate, "The RetryPolicy should be non null");
             this.delegate = delegate;
             return this;

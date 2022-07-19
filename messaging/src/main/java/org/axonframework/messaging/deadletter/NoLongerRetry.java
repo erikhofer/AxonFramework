@@ -10,7 +10,7 @@ public class NoLongerRetry implements RetryDecision {
     }
 
     @Override
-    public Instant retryAt() {
+    public Instant releaseAt() {
         return Instant.MIN;
     }
 

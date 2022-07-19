@@ -5,7 +5,6 @@ import org.axonframework.messaging.Message;
 
 import java.time.Instant;
 import java.util.Objects;
-import java.util.function.Consumer;
 import javax.annotation.Nullable;
 
 /**
@@ -21,43 +20,33 @@ class GenericDeadLetter<M extends Message<?>> implements DeadLetter<M> {
     private final M message;
     private final Cause cause;
     private final Instant enqueueAt;
-    private final Consumer<GenericDeadLetter<M>> evict;
-    private final Consumer<GenericDeadLetter<M>> release;
 
     public GenericDeadLetter(QueueIdentifier queueIdentifier,
                              M message,
                              Throwable cause,
-                             Instant enqueueAt,
-                             Consumer<GenericDeadLetter<M>> evict,
-                             Consumer<GenericDeadLetter<M>> release) {
+                             Instant enqueueAt) {
         this(IdentifierFactory.getInstance().generateIdentifier(),
-             queueIdentifier, message, cause != null ? new GenericCause(cause) : null, enqueueAt, evict, release);
+             queueIdentifier, message, cause != null ? new GenericCause(cause) : null, enqueueAt);
     }
 
     public GenericDeadLetter(String identifier,
                              QueueIdentifier queueIdentifier,
                              M message,
                              Throwable cause,
-                             Instant enqueueAt,
-                             Consumer<GenericDeadLetter<M>> evict,
-                             Consumer<GenericDeadLetter<M>> release) {
-        this(identifier, queueIdentifier, message, new GenericCause(cause), enqueueAt, evict, release);
+                             Instant enqueueAt) {
+        this(identifier, queueIdentifier, message, cause != null ? new GenericCause(cause) : null, enqueueAt);
     }
 
     public GenericDeadLetter(String identifier,
                              QueueIdentifier queueIdentifier,
                              M message,
                              Cause cause,
-                             Instant enqueueAt,
-                             Consumer<GenericDeadLetter<M>> evict,
-                             Consumer<GenericDeadLetter<M>> release) {
+                             Instant enqueueAt) {
         this.identifier = identifier;
         this.queueIdentifier = queueIdentifier;
         this.message = message;
         this.cause = cause;
         this.enqueueAt = enqueueAt;
-        this.evict = evict;
-        this.release = release;
     }
 
     @Override
@@ -84,16 +73,6 @@ class GenericDeadLetter<M extends Message<?>> implements DeadLetter<M> {
     @Override
     public Instant enqueuedAt() {
         return enqueueAt;
-    }
-
-    @Override
-    public void evict() {
-        evict.accept(this);
-    }
-
-    @Override
-    public void release() {
-        release.accept(this);
     }
 
     @Override

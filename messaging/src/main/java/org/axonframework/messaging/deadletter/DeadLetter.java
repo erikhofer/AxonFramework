@@ -54,6 +54,7 @@ public interface DeadLetter<M extends Message<?>> {
      *
      * @return The {@link Message} of type {@code T} contained in this letter.
      */
+    // TODO: 18-07-22 do we care that this is an implementation of `Message`? Can't this be Object?
     M message();
 
     /**
@@ -73,12 +74,26 @@ public interface DeadLetter<M extends Message<?>> {
     Instant enqueuedAt();
 
     /**
-     * Remove from the queue
+     * The moment in time when this letter will expire. Should be used to deduce whether the letter is ready to be
+     * evaluated. Will equal the {@link #enqueuedAt()} value if this letter is enqueued as part of a sequence to ensure
+     * it is available right after a previous letter within the same sequence.
+     *
+     * @return The moment in time when this letter will expire.
      */
-    void evict();
+    // TODO: 14-07-22 adjust javadoc
+    // TODO: 14-07-22 Should we store the RetryDecision, so that take() may clear out entries and find the one to use?
+    // This means the RetryPolicy becomes part of the construction of the DeadLetter.
+    // Or, that the RetryDecision isn't present on the DeadLetter interface, but on the RetryableDeadLetter interface(?)
+    // A RetryableDeadLetter interface would be a fair spot to maintain numberOfRetries, retriedAt, acknowledge and requeue too
+//    @Nullable
+//    Instant retryAt();
 
     /**
-     * Release claim on this letter
+     * The number of retries this {@link DeadLetter dead-letter} has gone through.
+     *
+     * @return The number of retries this {@link DeadLetter dead-letter} has gone through.
      */
-    void release();
+//    int numberOfRetries();
+
+    RetryDecision decision();
 }

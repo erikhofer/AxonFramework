@@ -12,7 +12,12 @@ import org.axonframework.messaging.Message;
 @FunctionalInterface
 public interface RetryPolicy<M extends Message<?>> {
 
-    RetryDecision decide(RetryableDeadLetter<M> deadLetter, Throwable cause);
+    default RetryDecision decide(RetryableDeadLetter<M> deadLetter, Throwable cause) {
+        return decide(deadLetter, cause, 0);
+    }
+
+    RetryDecision decide(RetryableDeadLetter<M> deadLetter, Throwable cause, int numberOfRetries);
+
 
     // TODO: 12-07-22 should use something like the EvaluationTask, as otherwise users need to be smart enough to do UnitOfWork operations in the intended order and on the intended components.
     // TODO: 12-07-22 but should allow a form of predicate to decide when to execute the EvaluationTask. This likely means removal of the SchedulingDeadLetterQueue, since that purpose doesn't belong there.
@@ -23,3 +28,11 @@ public interface RetryPolicy<M extends Message<?>> {
     // TODO: 12-07-22 Should this also impose decision on what to do after evaluation? Right now, the EvaluationTask decides on this itself. With the responsibility, it'll decide when to retry and what to do after a retry.
     // pretty certain it shouldn't do this.
 }
+
+// seq1
+//   2   3
+//   5d
+
+// seq2
+// 1    2   3
+// 1d

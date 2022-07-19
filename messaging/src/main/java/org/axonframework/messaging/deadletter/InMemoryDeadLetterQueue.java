@@ -56,7 +56,7 @@ import static org.axonframework.common.BuilderUtils.assertThat;
  * @author Steven van Beelen
  * @since 4.6.0
  */
-public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetterQueue<GenericDeadLetter<M>, M> {
+public class InMemoryDeadLetterQueue<M extends Message<?>, D extends DeadLetter<M>> implements DeadLetterQueue<M, D> {
 
     private static final Logger logger = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
@@ -66,7 +66,7 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
      */
     public static Clock clock = Clock.systemUTC();
 
-    private final Map<QueueIdentifier, Deque<GenericDeadLetter<M>>> deadLetters = new ConcurrentSkipListMap<>();
+    private final Map<QueueIdentifier, Deque<D>> deadLetters = new ConcurrentSkipListMap<>();
     private final Set<QueueIdentifier> takenSequences = new ConcurrentSkipListSet<>();
 
     private final int maxQueues;
@@ -77,7 +77,7 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
      *
      * @param builder The {@link Builder} used to instantiate a {@link InMemoryDeadLetterQueue} instance.
      */
-    protected InMemoryDeadLetterQueue(Builder<M> builder) {
+    protected InMemoryDeadLetterQueue(Builder<M, D> builder) {
         builder.validate();
         this.maxQueues = builder.maxQueues;
         this.maxQueueSize = builder.maxQueueSize;
@@ -94,7 +94,7 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
      * @param <M> The type of {@link Message} maintained in this {@link DeadLetterQueue}.
      * @return A Builder that can construct an {@link InMemoryDeadLetterQueue}.
      */
-    public static <M extends Message<?>> Builder<M> builder() {
+    public static <D extends DeadLetter<M>, M extends Message<?>> Builder<M, D> builder() {
         return new Builder<>();
     }
 
@@ -108,15 +108,16 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
      *
      * @return A default {@link InMemoryDeadLetterQueue}.
      */
-    public static <M extends Message<?>> InMemoryDeadLetterQueue<M> defaultQueue() {
+    public static <D extends DeadLetter<M>, M extends Message<?>> InMemoryDeadLetterQueue<M, D> defaultQueue() {
         //noinspection unchecked
-        return (InMemoryDeadLetterQueue<M>) builder().build();
+        return (InMemoryDeadLetterQueue<M, D>) builder().build();
     }
-
+    
+    // TODO - do we need this? Can't it be simpler, without the Message in there?
     @Override
-    public GenericDeadLetter<M> enqueue(@Nonnull QueueIdentifier identifier,
-                                        @Nonnull M deadLetter,
-                                        Throwable cause) throws DeadLetterQueueOverflowException {
+    public D enqueue(@Nonnull QueueIdentifier identifier,
+                     @Nonnull M deadLetter,
+                     Throwable cause) throws DeadLetterQueueOverflowException {
         if (isFull(identifier)) {
             throw new DeadLetterQueueOverflowException(
                     "No room left to enqueue message [" + deadLetter + "] for identifier ["
@@ -132,20 +133,17 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
                          deadLetter, identifier);
         }
 
-        // TODO: 15-07-22 this should work...right? Why do I need to cast this >_>
-        GenericDeadLetter<M> letter = new GenericDeadLetter<>(identifier,
-                                                              deadLetter,
-                                                              cause,
-                                                              clock.instant(),
-                                                              this::evict,
-                                                              this::release);
+        // TODO: 18-07-22 discuss with Mitchell why we'd need the event.
+        D letter = (D) new GenericDeadLetter<>(identifier, deadLetter, cause, clock.instant());
 
-        enqueue(letter);
+        deadLetters.computeIfAbsent(letter.queueIdentifier(), id -> new ConcurrentLinkedDeque<>())
+                   .addLast(letter);
+
         return letter;
     }
 
     @Override
-    public void enqueue(@Nonnull GenericDeadLetter<M> letter) throws DeadLetterQueueOverflowException {
+    public void enqueue(@Nonnull D letter) throws DeadLetterQueueOverflowException {
         deadLetters.computeIfAbsent(letter.queueIdentifier(), id -> new ConcurrentLinkedDeque<>())
                    .addLast(letter);
         // TODO: 14-07-22 I'd rather move this out of this impl into a specific retryable variant that uses scheduling
@@ -153,11 +151,11 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
     }
 
 
-    private void evict(GenericDeadLetter<M> letter) {
-        // TODO I can't make DeadLetter<M> of type D...
+    @Override
+    public void evict(D letter) {
         QueueIdentifier queueId = letter.queueIdentifier();
-        Deque<GenericDeadLetter<M>> sequence = deadLetters.get(queueId);
-        // TODO: 15-07-22 this should work...right? Why do I need to cast this >_>
+        Deque<D> sequence = deadLetters.get(queueId);
+
         sequence.remove(letter);
         logger.trace("Removed letter [{}].", letter.message().getIdentifier());
         if (sequence.isEmpty()) {
@@ -167,8 +165,8 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
         takenSequences.remove(queueId);
     }
 
-    // TODO I can't make DeadLetter<M> of type D...
-    private void release(GenericDeadLetter<M> letter) {
+    @Override
+    public void release(D letter) {
         takenSequences.remove(letter.queueIdentifier());
     }
 
@@ -181,7 +179,7 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
     }
 
     @Override
-    public Iterable<GenericDeadLetter<M>> deadLetters(@Nonnull QueueIdentifier identifier) {
+    public Iterable<D> deadLetters(@Nonnull QueueIdentifier identifier) {
         return contains(identifier) ? new ArrayList<>(deadLetters.get(identifier)) : Collections.emptyList();
     }
 
@@ -219,7 +217,7 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
     }
 
     @Override
-    public synchronized Optional<GenericDeadLetter<M>> take(@Nonnull String group) {
+    public synchronized Optional<D> take(@Nonnull String group) {
         logger.trace("Attempting to take a dead letter from the queue for [{}].", group);
         if (deadLetters.isEmpty()) {
             return Optional.empty();
@@ -237,7 +235,7 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
             return Optional.empty();
         }
 
-        GenericDeadLetter<M> letter = getOldestLetter(availableSequences);
+        D letter = getOldestLetter(availableSequences);
         if (letter == null) {
             return Optional.empty();
         }
@@ -246,8 +244,8 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
         return Optional.of(letter);
     }
 
-    private GenericDeadLetter<M> getOldestLetter(List<QueueIdentifier> queueIds) {
-        Set<Map.Entry<QueueIdentifier, Deque<GenericDeadLetter<M>>>> availableSequences =
+    private D getOldestLetter(List<QueueIdentifier> queueIds) {
+        Set<Map.Entry<QueueIdentifier, Deque<D>>> availableSequences =
                 deadLetters.entrySet()
                            .stream()
                            .filter(entry -> queueIds.contains(entry.getKey()))
@@ -255,9 +253,9 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
 
         Instant current = clock.instant();
         long oldestSequence = Long.MAX_VALUE;
-        GenericDeadLetter<M> oldestLetter = null;
-        for (Map.Entry<QueueIdentifier, Deque<GenericDeadLetter<M>>> sequence : availableSequences) {
-            GenericDeadLetter<M> letter = sequence.getValue().peekFirst();
+        D oldestLetter = null;
+        for (Map.Entry<QueueIdentifier, Deque<D>> sequence : availableSequences) {
+            D letter = sequence.getValue().peekFirst();
             if (letter != null
                     && letter.enqueuedAt().toEpochMilli() <= current.toEpochMilli()
                     && letter.enqueuedAt().toEpochMilli() < oldestSequence) {
@@ -292,7 +290,7 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
      *
      * @param <M> The type of {@link Message} maintained in this {@link DeadLetterQueue}.
      */
-    public static class Builder<M extends Message<?>> {
+    public static class Builder<M extends Message<?>, D extends DeadLetter<M>> {
 
         private int maxQueues = 1024;
         private int maxQueueSize = 1024;
@@ -307,7 +305,7 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
          * @param maxQueues The maximum amount of queues for the queue under construction.
          * @return The current Builder, for fluent interfacing.
          */
-        public Builder<M> maxQueues(int maxQueues) {
+        public Builder<M, D> maxQueues(int maxQueues) {
             assertThat(maxQueues,
                        value -> value >= 128,
                        "The maximum number of queues should be larger or equal to 128");
@@ -324,7 +322,7 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
          * @param maxQueueSize The maximum amount of {@link DeadLetter letters} per queue.
          * @return The current Builder, for fluent interfacing.
          */
-        public Builder<M> maxQueueSize(int maxQueueSize) {
+        public Builder<M, D> maxQueueSize(int maxQueueSize) {
             assertThat(maxQueueSize,
                        value -> value >= 128,
                        "The maximum number of letters in a queue should be larger or equal to 128");
@@ -337,7 +335,7 @@ public class InMemoryDeadLetterQueue<M extends Message<?>> implements DeadLetter
          *
          * @return A {@link InMemoryDeadLetterQueue} as specified through this Builder.
          */
-        public InMemoryDeadLetterQueue<M> build() {
+        public InMemoryDeadLetterQueue<M, D> build() {
             return new InMemoryDeadLetterQueue<>(this);
         }
 

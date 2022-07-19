@@ -20,6 +20,7 @@ import org.axonframework.messaging.Message;
 
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
 import javax.annotation.Nonnull;
 
@@ -44,7 +45,25 @@ import javax.annotation.Nonnull;
  * @since 4.6.0
  */
 // TODO: 15-07-22 update javadoc
-public interface DeadLetterQueue<D extends DeadLetter<? extends Message<?>>, M extends Message<?>> {
+// TODO: 18-07-22 do we care that M is an implementation of `Message`? Can't this be Object?
+public interface DeadLetterQueue<D extends DeadLetter<?>> {
+
+    /**
+     * Enqueues a {@link Message} to this queue. The {@code deadLetter} will be FIFO ordered with all other dead letters
+     * of the same {@code identifier}.
+     *
+     * @param identifier The identifier of the queue to store the {@code deadLetter} in.
+     * @param deadLetter The {@link Message} to enqueue.
+     * @param cause      The cause for enqueueing the given {@code deadLetter}.
+     * @return A {@link DeadLetter} representing the enqueued {@code deadLetter}.
+     * @throws DeadLetterQueueOverflowException Thrown when this queue is {@link #isFull(QueueIdentifier)} for the given
+     *                                          {@code identifier}.
+     */
+//    default void enqueue(@Nonnull QueueIdentifier identifier,
+//              @Nonnull M deadLetter,
+//              Throwable cause) throws DeadLetterQueueOverflowException {
+//        enqueue(new GenericDeadLetter<>(identifier, deadLetter, cause, Instant.now()));
+//    }
 
     /**
      * Enqueues a {@link Message} to this queue. The {@code deadLetter} will be FIFO ordered with all other dead letters
@@ -59,7 +78,8 @@ public interface DeadLetterQueue<D extends DeadLetter<? extends Message<?>>, M e
      */
     D enqueue(@Nonnull QueueIdentifier identifier,
               @Nonnull M deadLetter,
-              Throwable cause) throws DeadLetterQueueOverflowException;
+              Throwable cause,
+              RetryPolicy<M> retryPolicy) throws DeadLetterQueueOverflowException;
 
 
     void enqueue(@Nonnull D letter) throws DeadLetterQueueOverflowException;
@@ -77,7 +97,8 @@ public interface DeadLetterQueue<D extends DeadLetter<? extends Message<?>>, M e
      *                                          {@code identifier}.
      */
     default Optional<D> enqueueIfPresent(@Nonnull QueueIdentifier identifier,
-                                         @Nonnull M message) throws DeadLetterQueueOverflowException {
+                                         @Nonnull M message)
+            throws DeadLetterQueueOverflowException {
         if (!contains(identifier)) {
             return Optional.empty();
         }
@@ -91,6 +112,17 @@ public interface DeadLetterQueue<D extends DeadLetter<? extends Message<?>>, M e
 
         return Optional.of(enqueue(identifier, message, null));
     }
+
+
+    /**
+     * Remove from the queue
+     */
+    void evict(D letter);
+
+    /**
+     * Release claim on this letter
+     */
+    void release(D letter);
 
     /**
      * Check whether there's a FIFO ordered queue of {@link DeadLetter dead-letters} for the given {@code identifier}.
@@ -114,7 +146,7 @@ public interface DeadLetterQueue<D extends DeadLetter<? extends Message<?>>, M e
      *
      * @return All {@link DeadLetterSequence dead letter sequences} held by this queue.
      */
-    Iterable<DeadLetterSequence<M>> deadLetterSequences();
+    <M extends Message<?>> Iterable<DeadLetterSequence<M>> deadLetterSequences();
     // TODO: 14-07-22 implement
 //    Map<QueueIdentifier, Iterable<D>> deadLetters();
 
@@ -170,6 +202,59 @@ public interface DeadLetterQueue<D extends DeadLetter<? extends Message<?>>, M e
      */
     // TODO: 15-07-22 update javadoc
     Optional<D> take(@Nonnull String group);
+
+    /**
+     * Release all {@link DeadLetter dead-letters} within this queue that match the given {@code queueFilter}.
+     * <p>
+     * This makes the matching letters ready to be {@link #take(String) taken}. Furthermore, it signals any matching
+     * (based on the {@code group} name) callbacks registered through {@link #onAvailable(String, Runnable)}.
+     *
+     * @param queueFilter A lambda selecting the letters within this queue to be released.
+     */
+    void release(@Nonnull Predicate<QueueIdentifier> queueFilter);
+
+    /**
+     * Release all {@link DeadLetter dead-letters} within this queue that match the given {@code group}.
+     * <p>
+     * This makes the matching letters ready to be {@link #take(String) taken}. Furthermore, it signals any matching
+     * (based on the {@code group} name) callbacks registered through {@link #onAvailable(String, Runnable)}.
+     *
+     * @param group The group descriptor of a {@link QueueIdentifier} to release all {@link DeadLetter dead-letters}
+     *              for.
+     */
+    default void release(@Nonnull String group) {
+        release(queueIdentifier -> Objects.equals(queueIdentifier.group(), group));
+    }
+
+    /**
+     * Release all {@link DeadLetter dead-letters} within this queue.
+     * <p>
+     * This makes the letters ready to be {@link #take(String) taken}. Furthermore, it signals any callbacks registered
+     * through {@link #onAvailable(String, Runnable)}.
+     */
+    default void release() {
+        release(queueIdentifier -> true);
+    }
+
+    /**
+     * Set the given {@code callback} for the given {@code group} to be invoked when {@link DeadLetter dead-letters} are
+     * ready to be {@link #take(String) taken} from the queue. Dead-letters may be released earlier through
+     * {@link #release(Predicate)} to automatically trigger the {@code callback} if the {@code group} matches.
+     *
+     * @param group    The group descriptor of a {@link QueueIdentifier} to register a {@code callback} for.
+     * @param callback The operation to run whenever {@link DeadLetter dead-letters} are released and ready to be
+     *                 taken.
+     */
+    void onAvailable(@Nonnull String group, @Nonnull Runnable callback);
+
+    /**
+     * Shutdown this queue. Invoking this operation ensure any
+     * {@link #onAvailable(String, Runnable) registered callbacks} that are active are properly stopped too.
+     *
+     * @return A {@link CompletableFuture} that's completed asynchronously once all active on available callbacks have
+     * completed.
+     */
+    CompletableFuture<Void> shutdown();
 
     /**
      * Clears out all {@link DeadLetter dead-letters} matching the given {@link Predicate queueFilter}.
